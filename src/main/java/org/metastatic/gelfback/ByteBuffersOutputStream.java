@@ -18,7 +18,7 @@ public class ByteBuffersOutputStream extends OutputStream {
         if (initialCapacity <= 0)
             throw new IllegalArgumentException("initialCapacity must be positive");
         buffers = new LinkedList<ByteBuffer>();
-        for (int i = 0; i <= initialCapacity; i += slabSize) {
+        for (int i = 0; i < initialCapacity; i += slabSize) {
             buffers.add(ByteBuffer.allocate(slabSize));
         }
         this.slabSize = slabSize;
@@ -41,7 +41,7 @@ public class ByteBuffersOutputStream extends OutputStream {
         ByteBuffer[] ret = buffers.toArray(new ByteBuffer[buffers.size()]);
         for (int i = 0; i < ret.length; i++) {
             ByteBuffer b = ret[i];
-            ret[i] = b.slice().asReadOnlyBuffer();
+            ret[i] = ((ByteBuffer) b.flip()).slice().asReadOnlyBuffer();
         }
         return ret;
     }

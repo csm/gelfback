@@ -80,6 +80,16 @@ public class GELFCodec {
             writeJsonString(w, "timestamp");
             w.write(':');
             writeJsonString(w, BigDecimal.valueOf(event.getTimeStamp()).divide(TIMESTAMP_DIVISOR).toPlainString());
+            w.write(',');
+
+            writeJsonString(w, "_logger");
+            w.write(':');
+            writeJsonString(w, event.getLoggerName());
+            w.write(',');
+
+            writeJsonString(w, "_thread");
+            w.write(':');
+            writeJsonString(w, event.getThreadName());
 
             if (includeCallerData || event.hasCallerData()) {
                 StackTraceElement[] stack = event.getCallerData();
@@ -98,6 +108,7 @@ public class GELFCodec {
             }
 
             w.write('}');
+            w.flush();
         }
         catch (IOException ioe) {
             throw new RuntimeException(ioe);
