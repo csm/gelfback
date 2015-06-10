@@ -4,6 +4,7 @@
         <gelfHost>${GRAYLOG_INT_TEST_HOST}</gelfHost>
         <localHost>gelfback.test</localHost>
         <includeCallerData>true</includeCallerData>
+        <includeStackTrace>true</includeStackTrace>
         <staticFields>application=gelfback-integration-test,stack=inf,foo=bar</staticFields>
     </appender>
 

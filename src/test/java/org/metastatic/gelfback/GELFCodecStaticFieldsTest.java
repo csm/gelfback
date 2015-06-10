@@ -8,6 +8,6 @@ import org.junit.Test;
 public class GELFCodecStaticFieldsTest {
     @Test
     public void testStaticFields() {
-        GELFCodec codec = new GELFCodec("test", true);
+        GELFCodec codec = new GELFCodec("test", true, true);
     }
 }

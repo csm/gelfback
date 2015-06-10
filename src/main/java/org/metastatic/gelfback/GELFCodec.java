@@ -22,14 +22,16 @@ public class GELFCodec {
 
     private final String host;
     private final boolean includeCallerData;
+    private final boolean includeStackTrace;
 
-    public GELFCodec(String host, boolean includeCallerData) {
+    public GELFCodec(String host, boolean includeCallerData, boolean includeStackTrace) {
         if (host == null)
             throw new NullPointerException();
         if (host.length() == 0)
             throw new IllegalArgumentException("host must not be empty");
         this.host = host;
         this.includeCallerData = includeCallerData;
+        this.includeStackTrace = includeStackTrace;
     }
 
     /**
@@ -90,12 +92,18 @@ public class GELFCodec {
             }
 
             if (event.getThrowableProxy() != null) {
-                ThrowableProxyConverter converter = new ThrowableProxyConverter();
-                converter.setOptionList(Collections.singletonList("full"));
-                converter.start();
-                writeJsonString(w, "_stack_trace");
+                if (includeStackTrace) {
+                    ThrowableProxyConverter converter = new ThrowableProxyConverter();
+                    converter.setOptionList(Collections.singletonList("full"));
+                    converter.start();
+                    writeJsonString(w, "_stack_trace");
+                    w.write(':');
+                    writeJsonString(w, converter.convert(event));
+                    w.write(',');
+                }
+                writeJsonString(w, "_exception");
                 w.write(':');
-                writeJsonString(w, converter.convert(event));
+                writeJsonString(w, event.getThrowableProxy().getClassName() + ": " + event.getThrowableProxy().getMessage());
                 w.write(',');
             }
 
@@ -126,6 +134,16 @@ public class GELFCodec {
                     writeJsonString(w, "_line");
                     w.write(':');
                     writeJsonInt(w, stack[0].getLineNumber());
+                    w.write(',');
+
+                    writeJsonString(w, "_class");
+                    w.write(':');
+                    writeJsonString(w, stack[0].getClassName());
+                    w.write(',');
+
+                    writeJsonString(w, "_method");
+                    w.write(':');
+                    writeJsonString(w, stack[0].getMethodName());
                 }
             }
 

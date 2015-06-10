@@ -137,6 +137,7 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     private int port;
     private String localhost;
     private boolean includeCallerData;
+    private boolean includeStackTrace;
     private AtomicReference<GELFCodec> codec = new AtomicReference<GELFCodec>();
     private int ttlSeconds = 60;
     private Map<String, String> staticFields;
@@ -153,13 +154,13 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     public GELFTCPAppender() {
         if (debugging) {
             System.err.println("GELFTCPAppender created");
-            self = this;
         }
+        self = this;
     }
 
     @Override
     public void start() {
-        codec.set(new GELFCodec(localhost, includeCallerData));
+        codec.set(new GELFCodec(localhost, includeCallerData, includeStackTrace));
         if (isStarted.compareAndSet(false, true)) {
             isRunning.set(true);
             Thread connectorThread = new Thread(new Connector(), "GELF-TCP-Connector");
@@ -181,7 +182,7 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     @Override
     protected void append(ILoggingEvent e) {
         debug("appending event %s", e);
-        events.add(e);
+        events.add(new WrappedLoggingEvent(e, includeCallerData));
         inflight++;
     }
 
@@ -211,7 +212,7 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
         debug("setting local host: %s", host);
         this.localhost = host;
         if (isStarted.get()) {
-            codec.set(new GELFCodec(localhost, includeCallerData));
+            codec.set(new GELFCodec(localhost, includeCallerData, includeStackTrace));
         }
     }
 
@@ -219,7 +220,15 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
         debug("setting include caller data: %s", includeCallerData);
         this.includeCallerData = includeCallerData;
         if (isStarted.get()) {
-            codec.set(new GELFCodec(localhost, includeCallerData));
+            codec.set(new GELFCodec(localhost, includeCallerData, includeStackTrace));
+        }
+    }
+
+    public void setIncludeStackTrace(boolean includeStackTrace) {
+        debug("setting include stack trace: %s", includeStackTrace);
+        this.includeStackTrace = includeStackTrace;
+        if (isStarted.get()) {
+            codec.set(new GELFCodec(localhost, includeCallerData, includeStackTrace));
         }
     }
 
@@ -253,6 +262,6 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     }
 
     public static boolean drained() {
-        return !debugging || (self.events.isEmpty() && self.inflight == 0);
+        return (self.events.isEmpty() && (self.inflight == 0));
     }
 }

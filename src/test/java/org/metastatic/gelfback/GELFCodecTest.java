@@ -68,7 +68,7 @@ public class GELFCodecTest {
 
     @Test
     public void testBasic() throws UnsupportedEncodingException {
-        GELFCodec codec = new GELFCodec("test", true);
+        GELFCodec codec = new GELFCodec("test", true, true);
         LoggingEvent event = new LoggingEvent();
         event.setLevel(Level.INFO);
         event.setMessage("test message, my integer: {}");
@@ -93,7 +93,7 @@ public class GELFCodecTest {
 
     @Test
     public void testWithThrowable() {
-        GELFCodec codec = new GELFCodec("test", true);
+        GELFCodec codec = new GELFCodec("test", true, true);
         try {
             throw new Exception("bam!");
         } catch (Exception e) {
