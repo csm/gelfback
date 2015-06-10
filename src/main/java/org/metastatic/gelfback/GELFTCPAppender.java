@@ -4,9 +4,14 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentSkipListSet;
@@ -16,23 +21,28 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Append log messages to Graylog via GELF TCP.
  */
 public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     private class Sender implements Runnable {
-        @Override
         public void run() {
+            debug("GELF Sender thread starting");
             while (isRunning.get()) {
                 try {
                     ILoggingEvent event = events.take();
+                    debug("received event: %s", event);
                     SocketChannel channel = null;
-                    connectedLock.lock();
-                    try {
+                    debug("sender waiting for %s..", connectedMonitor);
+                    synchronized (connectedMonitor) {
+                        debug("sender locked %s", connectedMonitor);
                         while (isRunning.get() && (channel = GELFTCPAppender.this.channel.get()) == null) {
                             try {
-                                connectedCondition.await(100, TimeUnit.MILLISECONDS);
+                                debug("waiting for connection...");
+                                connectedMonitor.wait(1000);
                             } catch (InterruptedException e) {
                                 e.printStackTrace();
                             }
@@ -42,34 +52,39 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
                         GELFCodec codec = GELFTCPAppender.this.codec.get();
                         if (codec == null) // shouldn't happen
                             continue;
-                        ByteBuffer[] formatted = codec.framed(event);
+                        ByteBuffer[] formatted = codec.framed(event, staticFields != null ? staticFields : Collections.<String, String>emptyMap());
                         channel.write(formatted);
-                    } finally {
-                        connectedLock.unlock();
+                        debug("sent message!");
+                        inflight--;
                     }
                 } catch (Exception e) {
-                    // pass
+                    debug(e, "exception on sender loop");
                 }
             }
         }
     }
 
     private class Connector implements Runnable {
-        @Override
         public void run() {
+            boolean complainedAboutUnknownHost = false;
+            debug("GELF Connector thread starting");
             SocketChannel channel;
             while (isRunning.get()) {
                 try {
-                    connectedLock.lock();
-                    try {
-                        InetSocketAddress address = new InetSocketAddress(host, port);
+                    debug("connector waiting for %s..", connectedMonitor);
+                    synchronized (connectedMonitor) {
+                        debug("connector locked %s", connectedMonitor);
+                        debug("resolving %s...", host);
+                        InetAddress hostaddr = InetAddress.getByName(host);
+                        debug("resolved to %s", hostaddr);
+                        InetSocketAddress address = new InetSocketAddress(hostaddr, port);
+                        debug("connecting to %s:%d...", host, port);
                         channel = SocketChannel.open();
                         channel.connect(address);
                         GELFTCPAppender.this.channel.set(channel);
-                        connectedCondition.signal();
-                    } finally {
-                        connectedLock.unlock();
+                        connectedMonitor.notify();
                     }
+                    debug("GELF TCP connected!");
 
                     reconnectLock.lock();
                     try {
@@ -79,19 +94,32 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
                     } finally {
                         reconnectLock.unlock();
                     }
+                    debug("reconnect TTL expired, reconnecting...");
 
-                    connectedLock.lock();
-                    try {
+                    synchronized (connectedMonitor) {
                         GELFTCPAppender.this.channel.set(null);
                         channel.close();
-                    } finally {
-                        connectedLock.unlock();
+                    }
+                } catch (UnknownHostException uhe) {
+                    if (!complainedAboutUnknownHost) {
+                        GELFTCPAppender.this.addError("Unknown host: " + host);
+                        //System.err.println("Unknown host: " + host + ". We will try and resolve the host name again, every 60 seconds. This message will not be printed again.");
+                        complainedAboutUnknownHost = true;
+                    }
+                    try {
+                        Thread.sleep(60000);
+                    } catch (InterruptedException e) {
                     }
                 } catch (IOException e) {
+                    debug(e, "exception caught connecting: %s", e);
+                } catch (Exception e) {
+                    debug(e, "exception in connector loop");
                 }
             }
         }
     }
+
+    private static final Pattern keyValuePattern = Pattern.compile("(?<key>[^=]+)=(?<value>[^,]+)(?:,|$)");
 
     private static final int QUEUE_SIZE = 1024;
     private final BlockingQueue<ILoggingEvent> events = new ArrayBlockingQueue<ILoggingEvent>(QUEUE_SIZE);
@@ -101,8 +129,7 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     private AtomicBoolean isStarted = new AtomicBoolean(false);
     private AtomicBoolean isRunning = new AtomicBoolean(false);
 
-    private final Lock connectedLock = new ReentrantLock();
-    private final Condition connectedCondition = connectedLock.newCondition();
+    private final Object connectedMonitor = new Object();
     private final Lock reconnectLock = new ReentrantLock();
     private final Condition reconnectCondition = reconnectLock.newCondition();
 
@@ -111,22 +138,36 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     private String localhost;
     private boolean includeCallerData;
     private AtomicReference<GELFCodec> codec = new AtomicReference<GELFCodec>();
-    private int ttlSeconds;
+    private int ttlSeconds = 60;
+    private Map<String, String> staticFields;
+    private long inflight = 0;
+
+    static GELFTCPAppender self;
+    static final boolean debugging;
+
+    static {
+        String s = System.getenv("GELFBACK_DEBUG_TO_STDERR");
+        debugging = s != null && s.equalsIgnoreCase("true");
+    }
 
     public GELFTCPAppender() {
+        if (debugging) {
+            System.err.println("GELFTCPAppender created");
+            self = this;
+        }
     }
 
     @Override
     public void start() {
         codec.set(new GELFCodec(localhost, includeCallerData));
         if (isStarted.compareAndSet(false, true)) {
+            isRunning.set(true);
             Thread connectorThread = new Thread(new Connector(), "GELF-TCP-Connector");
             connectorThread.setDaemon(true);
             connectorThread.start();
             Thread senderThread = new Thread(new Sender(), "GELF-TCP-Sender");
             senderThread.setDaemon(true);
             senderThread.start();
-            isRunning.set(true);
         }
         super.start();
     }
@@ -139,10 +180,13 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
 
     @Override
     protected void append(ILoggingEvent e) {
+        debug("appending event %s", e);
         events.add(e);
+        inflight++;
     }
 
     public void setGelfPort(int port) {
+        debug("setting port to %d", port);
         this.port = port;
         reconnectLock.lock();
         try {
@@ -153,6 +197,7 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     }
 
     public void setGelfHost(String host) {
+        debug("setting host to %s", host);
         this.host = host;
         reconnectLock.lock();
         try {
@@ -163,6 +208,7 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     }
 
     public void setLocalHost(String host) {
+        debug("setting local host: %s", host);
         this.localhost = host;
         if (isStarted.get()) {
             codec.set(new GELFCodec(localhost, includeCallerData));
@@ -170,6 +216,7 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     }
 
     public void setIncludeCallerData(boolean includeCallerData) {
+        debug("setting include caller data: %s", includeCallerData);
         this.includeCallerData = includeCallerData;
         if (isStarted.get()) {
             codec.set(new GELFCodec(localhost, includeCallerData));
@@ -177,6 +224,35 @@ public class GELFTCPAppender extends AppenderBase<ILoggingEvent> {
     }
 
     public void setTtlSeconds(int ttlSeconds) {
+        debug("setting ttlSeconds: %s", ttlSeconds);
         this.ttlSeconds = ttlSeconds;
+    }
+
+    public void setStaticFields(String staticFields) {
+        debug("setting static fields: %s", staticFields);
+        Matcher matcher = keyValuePattern.matcher(staticFields);
+        Map<String, String> kvs = new LinkedHashMap<String, String>();
+        while (matcher.find()) {
+            kvs.put(matcher.group("key"), matcher.group("value"));
+        }
+        this.staticFields = kvs;
+        debug("static fields: %s", kvs);
+    }
+
+    private static void debug(String fmt, Object... args) {
+        if (debugging) {
+            System.err.println(String.format(fmt, args));
+        }
+    }
+
+    private static void debug(Throwable t, String fmt, Object... args) {
+        debug(fmt, args);
+        if (debugging) {
+            t.printStackTrace(System.err);
+        }
+    }
+
+    public static boolean drained() {
+        return !debugging || (self.events.isEmpty() && self.inflight == 0);
     }
 }

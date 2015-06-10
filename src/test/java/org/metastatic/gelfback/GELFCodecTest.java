@@ -1,14 +1,18 @@
 package org.metastatic.gelfback;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.LoggingEvent;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import org.junit.Test;
+import org.slf4j.helpers.NOPLogger;
 
 import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.util.Collections;
 
 import static org.junit.Assert.assertThat;
 import static org.hamcrest.CoreMatchers.*;
@@ -73,7 +77,7 @@ public class GELFCodecTest {
         event.setLoggerName("TestLogger");
         event.setThreadName("TestThread");
         event.setCallerData(Thread.currentThread().getStackTrace());
-        ByteBuffer[] buffers = codec.framed(event);
+        ByteBuffer[] buffers = codec.framed(event, Collections.<String, String>emptyMap());
         dump(buffers);
         byte[] bytes = glue(buffers);
         String jsonString = new String(bytes, 0, bytes.length - 1, "UTF-8");
@@ -85,5 +89,17 @@ public class GELFCodecTest {
         assertThat("host is test", o.get("host").getAsString(), is("test"));
         assertThat("timestamp is 978336000 seconds", o.get("timestamp").getAsBigDecimal(), is(BigDecimal.valueOf(978336000L)));
         assertThat("short_message", o.get("short_message").getAsString(), is("test message, my integer: 1234"));
+    }
+
+    @Test
+    public void testWithThrowable() {
+        GELFCodec codec = new GELFCodec("test", true);
+        try {
+            throw new Exception("bam!");
+        } catch (Exception e) {
+            LoggingEvent event = new LoggingEvent(GELFCodecTest.class.getName(), new LoggerContext().getLogger(getClass()), Level.ERROR, "some error occurred: {}", e, new Object[]{1234});
+            ByteBuffer[] buffers = codec.framed(event);
+            dump(buffers);
+        }
     }
 }

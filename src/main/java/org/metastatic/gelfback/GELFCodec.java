@@ -1,11 +1,17 @@
 package org.metastatic.gelfback;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.pattern.ExtendedThrowableProxyConverter;
+import ch.qos.logback.classic.pattern.ThrowableProxyConverter;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
 
 import java.io.*;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
 
 /**
  * Generic GELF codec; turns log messages into JSON bytes.
@@ -30,16 +36,22 @@ public class GELFCodec {
      * Encode the given log event as uncompressed JSON, framed for TCP transport with a null byte.
      *
      * @param event The event.
+     * @param staticFields A set of key/value pairs to include in the event; each key is prefixed
+     *                     with an underscore ("_").
      * @return An array of byte buffers containing the JSON bytes ready to send.
      */
-    public ByteBuffer[] framed(ILoggingEvent event) {
+    public ByteBuffer[] framed(ILoggingEvent event, Map<String, String> staticFields) {
         ByteBuffersOutputStream out = new ByteBuffersOutputStream();
-        encodeTo(event, out);
+        encodeTo(event, staticFields, out);
         out.write(0);
         return out.toBuffers();
     }
 
-    private void encodeTo(ILoggingEvent event, OutputStream out) {
+    public ByteBuffer[] framed(ILoggingEvent event) {
+        return framed(event, Collections.<String, String>emptyMap());
+    }
+
+    private void encodeTo(ILoggingEvent event, Map<String, String> staticFields, OutputStream out) {
         try {
             OutputStreamWriter w = new OutputStreamWriter(out, "UTF-8");
             w.write('{');
@@ -77,9 +89,19 @@ public class GELFCodec {
                 w.write(',');
             }
 
+            if (event.getThrowableProxy() != null) {
+                ThrowableProxyConverter converter = new ThrowableProxyConverter();
+                converter.setOptionList(Collections.singletonList("full"));
+                converter.start();
+                writeJsonString(w, "_stack_trace");
+                w.write(':');
+                writeJsonString(w, converter.convert(event));
+                w.write(',');
+            }
+
             writeJsonString(w, "timestamp");
             w.write(':');
-            writeJsonString(w, BigDecimal.valueOf(event.getTimeStamp()).divide(TIMESTAMP_DIVISOR).toPlainString());
+            writeJsonString(w, BigDecimal.valueOf(event.getTimeStamp()).divide(TIMESTAMP_DIVISOR, BigDecimal.ROUND_DOWN).toPlainString());
             w.write(',');
 
             writeJsonString(w, "_logger");
@@ -104,6 +126,15 @@ public class GELFCodec {
                     writeJsonString(w, "_line");
                     w.write(':');
                     writeJsonInt(w, stack[0].getLineNumber());
+                }
+            }
+
+            if (staticFields != null) {
+                for (Map.Entry<String, String> e: staticFields.entrySet()) {
+                    w.write(',');
+                    writeJsonString(w, "_" + e.getKey());
+                    w.write(':');
+                    writeJsonString(w, e.getValue());
                 }
             }
 
