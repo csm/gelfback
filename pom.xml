@@ -6,7 +6,7 @@
 
     <groupId>org.metastatic</groupId>
     <artifactId>gelfback</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1-SNAPSHOT</version>
     <name>gelfback</name>
     <packaging>jar</packaging>
     <description>An asynchronous TCP logback appender for GELF.</description>
